@@ -1,8 +1,19 @@
 """
+compute_statistics.py
+---------------------
 Computes exact dataset statistics for the ArXiv split of the
 scientific_papers dataset (Cohan et al., 2018).
 
-Fields: article (full paper text), abstract (summary)
+Downloads the dataset directly from the official S3 URL used by the
+armanc/scientific_papers HuggingFace loading script — no local files
+needed, works for all team members, no trust_remote_code issues.
+
+The zip is cached in ~/.cache/scientific_papers/ after the first run
+so it is only downloaded once.
+
+Field names (from the loading script):
+    article_text  : List[str]  — sentences of the full paper
+    abstract_text : List[str]  — sentences of the abstract
 
 Subset sizes used in this project:
     - Train:      first 5,000 examples (computational constraint)
@@ -10,31 +21,36 @@ Subset sizes used in this project:
     - Test:       full 6,440 examples  (for final evaluation)
 
 Run with:
-    pip install datasets transformers tqdm
+    pip install transformers tqdm
     python compute_statistics.py
 
 Output:
-    - Prints a statistics table to the terminal
+    - Prints a statistics table to stdout
     - Saves exact numbers to dataset_statistics.json
 """
 
+import io
 import json
+import os
 import statistics
+import urllib.request
+import zipfile
+from pathlib import Path
 from transformers import AutoTokenizer
 from tqdm import tqdm
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Local jsonlines files from the armanc/scientific_papers dataset
-DATA_DIR = "arxiv-dataset"
-LOCAL_FILES = {
-    "train":      f"{DATA_DIR}/train.txt",
-    "validation": f"{DATA_DIR}/val.txt",
-    "test":       f"{DATA_DIR}/test.txt",
-}
-TOKENIZER_NAME = "facebook/bart-base"   # same tokenizer used for fine-tuning
+S3_URL         = "https://s3.amazonaws.com/datasets.huggingface.co/scientific_papers/1.1.1/arxiv-dataset.zip"
+CACHE_DIR      = Path.home() / ".cache" / "scientific_papers" / "arxiv"
+TOKENIZER_NAME = "facebook/bart-base"
 OUTPUT_FILE    = "dataset_statistics.json"
 
-# Subset sizes: None means use the full split
+SPLIT_FILES = {
+    "train":      "arxiv-dataset/train.txt",
+    "validation": "arxiv-dataset/val.txt",
+    "test":       "arxiv-dataset/test.txt",
+}
+
 SPLIT_SIZES = {
     "train":      5000,
     "validation": 500,
@@ -42,21 +58,56 @@ SPLIT_SIZES = {
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+def ensure_data() -> zipfile.ZipFile:
+    """Download the zip once and cache it; return an open ZipFile handle."""
+    zip_path = CACHE_DIR / "arxiv-dataset.zip"
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not zip_path.exists():
+        print(f"Downloading dataset from S3 → {zip_path}")
+        print("(This only happens once — subsequent runs use the cache.)\n")
+
+        def reporthook(count, block_size, total_size):
+            pct = min(100, count * block_size * 100 // total_size) if total_size > 0 else 0
+            print(f"\r  {pct}% downloaded", end="", flush=True)
+
+        urllib.request.urlretrieve(S3_URL, zip_path, reporthook)
+        print()  # newline after progress
+    else:
+        print(f"Using cached dataset at {zip_path}\n")
+
+    return zipfile.ZipFile(zip_path, "r")
+
+
+def iter_split(zf: zipfile.ZipFile, split_name: str, subset_size: int | None):
+    """Yield parsed JSON objects from the requested split inside the zip."""
+    inner_path = SPLIT_FILES[split_name]
+    with zf.open(inner_path) as raw:
+        loaded = 0
+        for line in io.TextIOWrapper(raw, encoding="utf-8"):
+            if subset_size and loaded >= subset_size:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+                loaded += 1
+            except json.JSONDecodeError:
+                continue
+
+
 print(f"Loading tokenizer: {TOKENIZER_NAME}")
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 
 
-def count_words(text: str) -> int:
-    return len(text.split())
+def count_words(sentences: list) -> int:
+    return sum(len(s.split()) for s in sentences)
 
 
-def count_sentences(text: str) -> int:
-    # Paragraphs are separated by \n in this dataset version
-    return len([s for s in text.split("\n") if s.strip()])
-
-
-def count_tokens(text: str) -> int:
-    return len(tokenizer.encode(text, add_special_tokens=False))
+def count_tokens(sentences: list) -> int:
+    return len(tokenizer.encode(" ".join(sentences), add_special_tokens=False))
 
 
 def summarise(values: list, n: int) -> dict:
@@ -70,61 +121,78 @@ def summarise(values: list, n: int) -> dict:
     }
 
 
-def collect_stats(split_name: str, subset_size: int | None) -> dict:
+def collect_stats(zf: zipfile.ZipFile, split_name: str, subset_size: int | None) -> dict:
     limit_str = f"first {subset_size:,}" if subset_size else "full"
-    filepath = LOCAL_FILES[split_name]
-    print(f"\nLoading split: {split_name} ({limit_str} examples) from {filepath}")
+    print(f"\nProcessing split: {split_name} ({limit_str} examples)")
 
     article_tokens, article_words, article_sents = [], [], []
     abstract_tokens, abstract_words, abstract_sents = [], [], []
     skipped = 0
-    loaded = 0
 
-    with open(filepath, "r", encoding="utf-8") as f:
-        for line in tqdm(f, desc=split_name):
-            if subset_size and loaded >= subset_size:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                example = json.loads(line)
-            except json.JSONDecodeError:
-                skipped += 1
-                continue
+    # Count lines for tqdm (re-open for counting, then iterate properly)
+    total = subset_size  # use subset_size as total hint for progress bar
 
-            # Original armanc dataset uses article_text and abstract_text
-            # as lists of sentences — join them into a single string
-            art_raw  = example.get("article_text", [])
-            abst_raw = example.get("abstract_text", [])
+    for example in tqdm(iter_split(zf, split_name, subset_size),
+                        total=total, desc=split_name):
+        art  = example.get("article_text", [])
+        abst = example.get("abstract_text", [])
 
-            if isinstance(art_raw, list):
-                art  = " ".join(art_raw)
-                abst = " ".join(abst_raw)
-                n_art_sents  = len(art_raw)
-                n_abst_sents = len(abst_raw)
-            else:
-                art  = art_raw
-                abst = abst_raw
-                n_art_sents  = count_sentences(art)
-                n_abst_sents = count_sentences(abst)
+        # Strip <S> / </S> tags the same way the loading script does
+        abst = [s.replace("<S>", "").replace("</S>", "") for s in abst]
 
-            if not art.strip() or not abst.strip():
-                skipped += 1
-                continue
+        if not art or not abst:
+            skipped += 1
+            continue
 
-            article_tokens.append(count_tokens(art))
-            article_words.append(count_words(art))
-            article_sents.append(n_art_sents)
+        article_tokens.append(count_tokens(art))
+        article_words.append(count_words(art))
+        article_sents.append(len(art))
 
-            abstract_tokens.append(count_tokens(abst))
-            abstract_words.append(count_words(abst))
-            abstract_sents.append(n_abst_sents)
-
-            loaded += 1
+        abstract_tokens.append(count_tokens(abst))
+        abstract_words.append(count_words(abst))
+        abstract_sents.append(len(abst))
 
     n = len(article_tokens)
-    print(f"  Valid examples: {n:,}  |  Skipped: {skipped}")
+    print(f"  Valid: {n:,}  |  Skipped: {skipped}")
+
+    per_doc_ratios = [
+        at / ab for at, ab in zip(article_tokens, abstract_tokens) if ab > 0
+    ]
+
+    return {
+        "n_examples":         n,
+        "n_skipped":          skipped,
+        "subset_size_used":   subset_size if subset_size else "full split",
+        "article_tokens":     summarise(article_tokens, n),
+        "article_words":      summarise(article_words, n),
+        "article_sentences":  summarise(article_sents, n),
+        "abstract_tokens":    summarise(abstract_tokens, n),
+        "abstract_words":     summarise(abstract_words, n),
+        "abstract_sentences": summarise(abstract_sents, n),
+        "compression_ratio": {
+            "definition": (
+                "Per-document ratio of article_tokens / abstract_tokens "
+                "(BART tokenizer, no special tokens), averaged across documents."
+            ),
+            "mean":   round(statistics.mean(per_doc_ratios), 2),
+            "median": round(statistics.median(per_doc_ratios), 2),
+            "stdev":  round(statistics.stdev(per_doc_ratios), 2),
+            "min":    round(min(per_doc_ratios), 2),
+            "max":    round(max(per_doc_ratios), 2),
+        },
+        "truncation_coverage": {
+            "description": (
+                "Percentage of articles that already fit within the "
+                "truncation thresholds used in this project."
+            ),
+            "pct_within_1024_tokens": round(
+                100 * sum(1 for t in article_tokens if t <= 1024) / n, 2
+            ),
+            "pct_within_3000_words": round(
+                100 * sum(1 for w in article_words if w <= 3000) / n, 2
+            ),
+        },
+    }
 
     # Compression ratio: article_tokens / abstract_tokens, per document
     per_doc_ratios = [
@@ -172,8 +240,10 @@ def collect_stats(split_name: str, subset_size: int | None) -> dict:
 # ── Main ──────────────────────────────────────────────────────────────────────
 all_results = {}
 
-for split_name, subset_size in SPLIT_SIZES.items():
-    all_results[split_name] = collect_stats(split_name, subset_size)
+zf = ensure_data()
+with zf:
+    for split_name, subset_size in SPLIT_SIZES.items():
+        all_results[split_name] = collect_stats(zf, split_name, subset_size)
 
 # Save raw JSON
 with open(OUTPUT_FILE, "w") as f:

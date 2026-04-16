@@ -1,68 +1,68 @@
 {
   "train": {
     "n_examples": 5000,
-    "n_skipped": 1,
+    "n_skipped": 0,
     "subset_size_used": 5000,
     "article_tokens": {
       "count": 5000,
-      "mean": 8470.27,
+      "mean": 8469.16,
       "median": 6770.0,
-      "stdev": 7089.17,
-      "min": 14,
+      "stdev": 7090.06,
+      "min": 0,
       "max": 100666
     },
     "article_words": {
       "count": 5000,
-      "mean": 5950.13,
+      "mean": 5949.48,
       "median": 4890.0,
-      "stdev": 4458.9,
-      "min": 4,
+      "stdev": 4459.53,
+      "min": 0,
       "max": 49926
     },
     "article_sentences": {
       "count": 5000,
-      "mean": 204.24,
+      "mean": 204.22,
       "median": 171.0,
-      "stdev": 148.31,
+      "stdev": 148.33,
       "min": 1,
       "max": 1733
     },
     "abstract_tokens": {
       "count": 5000,
-      "mean": 431.25,
-      "median": 240.0,
-      "stdev": 1004.79,
-      "min": 13,
-      "max": 23085
+      "mean": 390.42,
+      "median": 215.5,
+      "stdev": 911.08,
+      "min": 8,
+      "max": 21176
     },
     "abstract_words": {
       "count": 5000,
-      "mean": 305.67,
-      "median": 179.0,
-      "stdev": 658.21,
-      "min": 9,
-      "max": 12563
+      "mean": 285.85,
+      "median": 167.0,
+      "stdev": 611.51,
+      "min": 7,
+      "max": 11609
     },
     "abstract_sentences": {
       "count": 5000,
-      "mean": 10.1,
+      "mean": 10.11,
       "median": 6.0,
-      "stdev": 24.51,
+      "stdev": 24.52,
       "min": 1,
       "max": 477
     },
     "compression_ratio": {
       "definition": "Per-document ratio of article_tokens / abstract_tokens (BART tokenizer, no special tokens), averaged across documents.",
-      "mean": 38.38,
-      "median": 29.32,
-      "stdev": 48.15,
+      "mean": 43.1,
+      "median": 32.61,
+      "stdev": 57.39,
       "min": 0.0,
-      "max": 2147.69
+      "max": 2659.05
     },
     "truncation_coverage": {
       "description": "Percentage of articles that already fit within the truncation thresholds used in this project.",
-      "pct_within_1024_tokens": 2.16,
-      "pct_within_3000_words": 22.94
+      "pct_within_1024_tokens": 2.18,
+      "pct_within_3000_words": 22.96
     }
   },
   "validation": {
@@ -95,19 +95,19 @@
     },
     "abstract_tokens": {
       "count": 500,
-      "mean": 230.52,
-      "median": 225.0,
-      "stdev": 88.79,
-      "min": 69,
-      "max": 655
+      "mean": 207.13,
+      "median": 204.0,
+      "stdev": 82.16,
+      "min": 60,
+      "max": 634
     },
     "abstract_words": {
       "count": 500,
-      "mean": 172.13,
-      "median": 171.0,
-      "stdev": 62.93,
-      "min": 51,
-      "max": 300
+      "mean": 160.94,
+      "median": 160.5,
+      "stdev": 59.5,
+      "min": 45,
+      "max": 286
     },
     "abstract_sentences": {
       "count": 500,
@@ -119,11 +119,11 @@
     },
     "compression_ratio": {
       "definition": "Per-document ratio of article_tokens / abstract_tokens (BART tokenizer, no special tokens), averaged across documents.",
-      "mean": 39.49,
-      "median": 32.51,
-      "stdev": 31.13,
-      "min": 1.96,
-      "max": 237.32
+      "mean": 44.25,
+      "median": 36.44,
+      "stdev": 35.07,
+      "min": 2.1,
+      "max": 268.67
     },
     "truncation_coverage": {
       "description": "Percentage of articles that already fit within the truncation thresholds used in this project.",
@@ -161,19 +161,19 @@
     },
     "abstract_tokens": {
       "count": 6440,
-      "mean": 232.99,
-      "median": 226.0,
-      "stdev": 84.04,
-      "min": 61,
-      "max": 667
+      "mean": 209.23,
+      "median": 202.5,
+      "stdev": 77.52,
+      "min": 52,
+      "max": 630
     },
     "abstract_words": {
       "count": 6440,
-      "mean": 174.51,
-      "median": 171.0,
-      "stdev": 61.04,
-      "min": 50,
-      "max": 300
+      "mean": 163.13,
+      "median": 159.0,
+      "stdev": 57.8,
+      "min": 44,
+      "max": 290
     },
     "abstract_sentences": {
       "count": 6440,
@@ -185,11 +185,11 @@
     },
     "compression_ratio": {
       "definition": "Per-document ratio of article_tokens / abstract_tokens (BART tokenizer, no special tokens), averaged across documents.",
-      "mean": 38.23,
-      "median": 30.88,
-      "stdev": 29.99,
-      "min": 1.04,
-      "max": 430.53
+      "mean": 42.86,
+      "median": 34.48,
+      "stdev": 33.98,
+      "min": 1.21,
+      "max": 500.98
     },
     "truncation_coverage": {
       "description": "Percentage of articles that already fit within the truncation thresholds used in this project.",

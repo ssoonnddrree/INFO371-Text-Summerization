@@ -1,10 +1,5 @@
 # INFO371-Text-Summerization
 
-installed:
-'''bash
-    pip install datasets transformers tqdm
-'''
-
 # Dataset Statistics
 
 ## Overview
@@ -17,7 +12,7 @@ Due to computational constraints, we train on a **subset of 5,000 examples** and
 
 ## `compute_statistics.py`
 
-The script [`compute_statistics.py`](compute_statistics.py) computes exact statistics over each split used in this project. It reads directly from (`arxiv-dataset/train.txt`, `val.txt`, `test.txt`) and tokenizes all text using the **BART tokenizer** (`facebook/bart-base`) — the same tokenizer used during fine-tuning — so that token counts are internally consistent with the model.
+The script [`compute_statistics.py`](compute_statistics.py) computes exact statistics over each split used in this project. It downloads the dataset directly from the official S3 URL used by the `armanc/scientific_papers` HuggingFace loading script and caches the zip at `~/.cache/scientific_papers/arxiv/` — so the download only happens once per machine. Text is tokenized using the **BART tokenizer** (`facebook/bart-base`) — the same tokenizer used during fine-tuning — so that token counts are internally consistent with the model.
 
 ### What it computes
 
@@ -45,44 +40,44 @@ Results are printed to the terminal and saved to `dataset_statistics.json`.
 
 ### Train split (n = 5,000)
 
-|                    | Tokens    | Words    | Sentences |
-|--------------------|-----------|----------|-----------|
-| **Article mean**   | 8,470.27  | 5,950.13 | 204.24    |
-| **Article median** | 6,770.00  | 4,890.00 | 171.00    |
-| **Article min**    | 14        | 4        | 1         |
-| **Article max**    | 100,666   | 49,926   | 1,733     |
-| **Abstract mean**  | 431.25    | 305.67   | 10.10     |
-| **Abstract median**| 240.00    | 179.00   | 6.00      |
-| **Abstract min**   | 13        | 9        | 1         |
-| **Abstract max**   | 23,085    | 12,563   | 477       |
+|                     | Tokens    | Words     | Sentences |
+|---------------------|-----------|-----------|-----------|
+| **Article mean**    | 8,470.27  | 5,950.13  | 204.24    |
+| **Article median**  | 6,770.00  | 4,890.00  | 171.00    |
+| **Article min**     | 14        | 4         | 1         |
+| **Article max**     | 100,666   | 49,926    | 1,733     |
+| **Abstract mean**   | 431.25    | 305.67    | 10.10     |
+| **Abstract median** | 240.00    | 179.00    | 6.00      |
+| **Abstract min**    | 13        | 9         | 1         |
+| **Abstract max**    | 23,085    | 12,563    | 477       |
 
 > **Note:** The train subset shows higher variance in abstract length (stdev = 1,004.79 tokens) compared to the validation and test splits. This is likely due to a small number of outlier examples in the first 5,000 rows with unusually long abstracts (max 23,085 tokens). The validation and test splits, which cover a broader and more representative sample, show much tighter abstract distributions (stdev ≈ 85–89 tokens).
 
 ### Validation split (n = 500)
 
-|                    | Tokens   | Words    | Sentences |
-|--------------------|----------|----------|-----------|
-| **Article mean**   | 8,207.22 | 5,978.50 | 208.60    |
-| **Article median** | 6,907.00 | 5,110.50 | 175.50    |
-| **Article min**    | 493      | 404      | 9         |
-| **Article max**    | 50,637   | 36,459   | 1,483     |
-| **Abstract mean**  | 230.52   | 172.13   | 5.60      |
-| **Abstract median**| 225.00   | 171.00   | 5.00      |
-| **Abstract min**   | 69       | 51       | 1         |
-| **Abstract max**   | 655      | 300      | 16        |
+|                     | Tokens    | Words     | Sentences |
+|---------------------|-----------|-----------|-----------|
+| **Article mean**    | 8,207.22  | 5,978.50  | 208.60    |
+| **Article median**  | 6,907.00  | 5,110.50  | 175.50    |
+| **Article min**     | 493       | 404       | 9         |
+| **Article max**     | 50,637    | 36,459    | 1,483     |
+| **Abstract mean**   | 230.52    | 172.13    | 5.60      |
+| **Abstract median** | 225.00    | 171.00    | 5.00      |
+| **Abstract min**    | 69        | 51        | 1         |
+| **Abstract max**    | 655       | 300       | 16        |
 
 ### Test split (n = 6,440 — full)
 
-|                    | Tokens   | Words    | Sentences |
-|--------------------|----------|----------|-----------|
-| **Article mean**   | 8,131.70 | 5,905.87 | 205.68    |
-| **Article median** | 6,726.50 | 5,016.50 | 176.00    |
-| **Article min**    | 187      | 105      | 1         |
-| **Article max**    | 104,441  | 84,895   | 3,045     |
-| **Abstract mean**  | 232.99   | 174.51   | 5.69      |
-| **Abstract median**| 226.00   | 171.00   | 6.00      |
-| **Abstract min**   | 61       | 50       | 1         |
-| **Abstract max**   | 667      | 300      | 25        |
+|                     | Tokens    | Words     | Sentences |
+|---------------------|-----------|-----------|-----------|
+| **Article mean**    | 8,131.70  | 5,905.87  | 205.68    |
+| **Article median**  | 6,726.50  | 5,016.50  | 176.00    |
+| **Article min**     | 187       | 105       | 1         |
+| **Article max**     | 104,441   | 84,895    | 3,045     |
+| **Abstract mean**   | 232.99    | 174.51    | 5.69      |
+| **Abstract median** | 226.00    | 171.00    | 6.00      |
+| **Abstract min**    | 61        | 50        | 1         |
+| **Abstract max**    | 667       | 300       | 25        |
 
 ---
 
