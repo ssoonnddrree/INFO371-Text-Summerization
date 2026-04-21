@@ -1,0 +1,19 @@
+{
+  "model": "extractive_tfidf_lead_bias",
+  "config": {
+    "num_sentences": 6,
+    "lead_bias": 1.0,
+    "bertscore_model": "roberta-large"
+  },
+  "n_test_examples": 6440,
+  "rouge": {
+    "rouge1": 0.2248,
+    "rouge2": 0.049,
+    "rougeL": 0.1276
+  },
+  "bertscore": {
+    "precision": 0.7971,
+    "recall": 0.8129,
+    "f1": 0.8047
+  }
+}
