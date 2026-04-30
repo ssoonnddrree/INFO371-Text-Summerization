@@ -2,14 +2,15 @@
 extractive_baseline.py
 ----------------------
 Extractive summarization baseline using TF-IDF sentence scoring
-with a lead bias, evaluated on ROUGE and BERTScore.
+with a lead bias, evaluated on ROUGE, BERTScore, Semantic Similarity,
+and NLI-based Factual Consistency.
 
 This baseline runs on the full 6,440-example test split and saves results to:
     - extractive_baseline_summaries.json  (generated summaries)
-    - extractive_baseline_scores.json     (ROUGE + BERTScore results)
+    - extractive_baseline_scores.json     (all evaluation results)
 
 Run with:
-    pip install scikit-learn rouge-score bert-score tqdm
+    pip install scikit-learn rouge-score bert-score tqdm sentence-transformers transformers==4.44.0
     python extractive_baseline.py
 """
 
@@ -21,9 +22,12 @@ import zipfile
 from pathlib import Path
 from collections import Counter
 
+import numpy as np
 from rouge_score import rouge_scorer
 from bert_score import score as bert_score
 from tqdm import tqdm
+from sentence_transformers import SentenceTransformer, util
+from transformers import pipeline
 
 # ── Config ────────────────────────────────────────────────────────────────────
 S3_URL         = "https://s3.amazonaws.com/datasets.huggingface.co/scientific_papers/1.1.1/arxiv-dataset.zip"
@@ -39,24 +43,33 @@ NUM_SENTENCES  = 6
 # Sentences earlier in the document receive a higher weight because
 # scientific papers front-load their key contributions in the introduction.
 # The multiplier decays as: 1 + LEAD_BIAS / (1 + position)
-# The formula gives sentence 0 twice the weight, decaying smoothly so deep sentences can still surface if their TF-IDF score is strong enough.
+# The formula gives sentence 0 twice the weight, decaying smoothly so
+# deep sentences can still surface if their TF-IDF score is strong enough.
 LEAD_BIAS      = 1.0
 
 # BERTScore model: roberta-large is the standard default for bert_score
-# and is confirmed to work reliably. 
-# allenai/scibert_scivocab_uncased triggers an internal OverflowError in the bert_score library due to a
-# known incompatibility between its tokenizer and the bert_score internals — unrelated to our text lengths. 
-# roberta-large is a strong general model
-# that is widely used for BERTScore in summarization research, making our
-# results directly comparable to published baselines.
+# and is confirmed to work reliably.
 BERTSCORE_MODEL = "roberta-large"
+
+# Semantic similarity model: all-MiniLM-L6-v2 is a lightweight,
+# well-regarded sentence-transformers model for cosine similarity scoring.
+SEMANTIC_MODEL = "all-MiniLM-L6-v2"
+
+# NLI model: DeBERTa-v3-small cross-encoder for factual consistency scoring.
+# Each (source, summary) pair is scored as entailment/neutral/contradiction
+# and mapped to a [0, 1] consistency score.
+NLI_MODEL      = "cross-encoder/nli-deberta-v3-small"
+
+# To keep NLI runtime manageable over 6,440 examples, we subsample.
+# Set to None to run on all examples (will take ~30-40 min on GPU).
+NLI_SAMPLE_SIZE = 500
 
 SUMMARIES_FILE = "extractive_baseline_summaries.json"
 SCORES_FILE    = "extractive_baseline_scores.json"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# ── Data loading ────────────────────
+# ── Data loading ──────────────────────────────────────────────────────────────
 
 def ensure_data() -> zipfile.ZipFile:
     zip_path = CACHE_DIR / "arxiv-dataset.zip"
@@ -89,12 +102,7 @@ def iter_split(zf: zipfile.ZipFile, inner_path: str, limit: int | None = None):
                 continue
 
 
-# ── TF-IDF implementation ────────────────────────────────────────────────────
-# We implement TF-IDF from scratch (no sklearn) so the logic is transparent
-# and there are no extra dependencies beyond what we already need.
-#
-# A sentence's score is the sum of TF-IDF weights of all its words.
-# This is a classic unsupervised approach that requires no training data.
+# ── TF-IDF implementation ─────────────────────────────────────────────────────
 
 def tokenize(text: str) -> list[str]:
     """Lowercase, split on whitespace, keep only alphabetic tokens."""
@@ -105,10 +113,9 @@ def compute_tfidf_scores(sentences: list[str]) -> list[float]:
     N = len(sentences)
     tokenized = [tokenize(s) for s in sentences]
 
-    # Document frequency: how many sentences contain each term
     df: Counter = Counter()
     for tokens in tokenized:
-        df.update(set(tokens))      # set() so each term counted once per sentence
+        df.update(set(tokens))
 
     sentence_scores = []
     for tokens in tokenized:
@@ -116,7 +123,6 @@ def compute_tfidf_scores(sentences: list[str]) -> list[float]:
             sentence_scores.append(0.0)
             continue
 
-        # Term frequency within this sentence
         tf = Counter(tokens)
         total_terms = len(tokens)
 
@@ -131,21 +137,6 @@ def compute_tfidf_scores(sentences: list[str]) -> list[float]:
     return sentence_scores
 
 
-# ── Lead bias ────────────────────────────────────────────────────────────────
-# WHY LEAD BIAS?
-# Scientific papers are structured with a clear front-loading convention:
-# the abstract, introduction and contributions appear early. A purely
-# TF-IDF scorer treats all sentences equally regardless of position,
-# which can cause it to extract mid-paper technical details instead of
-# the high-level contributions.
-#
-# The lead bias multiplier rewards sentences that appear earlier in the
-# document. The formula 1 + LEAD_BIAS / (1 + position) means:
-#   - Sentence 0:  multiplier = 1 + 1.0 / 1 = 2.0  (double weight)
-#   - Sentence 5:  multiplier = 1 + 1.0 / 6 ≈ 1.17
-#   - Sentence 50: multiplier = 1 + 1.0 / 51 ≈ 1.02 (nearly neutral)
-# This is a soft bias: deep content can still surface if its TF-IDF score is high enough.
-
 def apply_lead_bias(scores: list[float], bias: float) -> list[float]:
     return [
         score * (1.0 + bias / (1.0 + pos))
@@ -153,17 +144,12 @@ def apply_lead_bias(scores: list[float], bias: float) -> list[float]:
     ]
 
 
-# ── Extraction ───────────────────────────────────────────────────────────────
+# ── Extraction ────────────────────────────────────────────────────────────────
 
 def extract_summary(sentences: list[str], n: int, bias: float) -> str:
     """
     Score sentences with TF-IDF + lead bias, select the top-n by score,
-    then reassemble them in their ORIGINAL document order.
-
-    We preserve original order (rather than sorting by score) because
-    a summary that reads in document order is more coherent.
-    The reader sees the logical flow of the paper rather than a scrambled
-    list of important-sounding sentences.
+    then reassemble them in their original document order.
     """
     if len(sentences) <= n:
         return " ".join(sentences)
@@ -171,24 +157,20 @@ def extract_summary(sentences: list[str], n: int, bias: float) -> str:
     scores  = compute_tfidf_scores(sentences)
     scores  = apply_lead_bias(scores, bias)
 
-    # Get indices of top-n scoring sentences
     top_indices = sorted(
         range(len(scores)),
         key=lambda i: scores[i],
         reverse=True
     )[:n]
 
-    # Re-sort by position to preserve document order
     top_indices = sorted(top_indices)
-
     return " ".join(sentences[i] for i in top_indices)
 
 
-# ── Evaluation ───────────────────────────────────────────────────────────────
+# ── Evaluation ────────────────────────────────────────────────────────────────
 
 def compute_rouge(predictions: list[str], references: list[str]) -> dict:
     """Compute ROUGE-1, ROUGE-2, ROUGE-L for all prediction/reference pairs."""
-
     scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
 
     r1_scores, r2_scores, rl_scores = [], [], []
@@ -208,14 +190,7 @@ def compute_rouge(predictions: list[str], references: list[str]) -> dict:
 
 
 def truncate_to_wordcount(text: str, max_words: int = 400) -> str:
-    """
-    Truncate text to max_words words before passing to BERTScore.
-    BERTScore uses BERT-based models with a hard 512-token limit.
-    Truncating to 400 words keeps us safely within that
-    limit for all inputs, including the longest generated summaries.
-    We truncate by words rather than tokens to avoid loading a second
-    tokenizer just for preprocessing.
-    """
+    """Truncate text to max_words words before passing to BERTScore."""
     words = text.split()
     return " ".join(words[:max_words]) if len(words) > max_words else text
 
@@ -237,19 +212,110 @@ def compute_bertscore(predictions: list[str], references: list[str], model: str)
     }
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+def compute_semantic_similarity(
+    predictions: list[str],
+    references: list[str],
+    model_name: str,
+    batch_size: int = 64
+) -> dict:
+    """
+    Compute cosine similarity between sentence embeddings of predictions
+    and references using a sentence-transformers model.
+
+    This serves as a semantic similarity metric comparable in purpose to
+    BERTScore F1, but using a single-vector-per-text approach rather than
+    token-level alignment.
+    """
+    print(f"\nComputing Semantic Similarity with {model_name}...")
+    model = SentenceTransformer(model_name)
+
+    print("  Encoding references...")
+    ref_embs  = model.encode(
+        references, convert_to_tensor=True,
+        show_progress_bar=True, batch_size=batch_size
+    )
+    print("  Encoding predictions...")
+    pred_embs = model.encode(
+        predictions, convert_to_tensor=True,
+        show_progress_bar=True, batch_size=batch_size
+    )
+
+    # Diagonal of cosine similarity matrix = per-pair similarity
+    scores = util.cos_sim(ref_embs, pred_embs).diagonal().cpu().numpy()
+
+    return {
+        "mean":   round(float(scores.mean()), 4),
+        "std":    round(float(scores.std()),  4),
+        "scores": scores.tolist(),
+    }
+
+
+def compute_nli_consistency(
+    sources: list[str],
+    summaries: list[str],
+    model_name: str,
+    batch_size: int = 8,
+    src_max_chars: int = 1500,
+    sum_max_chars: int = 500,
+) -> dict:
+    """
+    Compute factual consistency using an NLI cross-encoder.
+
+    For each (source, summary) pair:
+      - ENTAILMENT → consistency score = model confidence
+      - CONTRADICTION → consistency score = 1 - model confidence
+      - NEUTRAL → consistency score = 0.5
+
+    Sources are truncated to src_max_chars to stay within the model's
+    token limit while still providing enough context for NLI judgment.
+    """
+    print(f"\nComputing NLI Consistency with {model_name}...")
+    nli = pipeline(
+        "text-classification",
+        model=model_name,
+        device=0  # use GPU if available; set to -1 for CPU
+    )
+
+    scores = []
+    for i in tqdm(range(0, len(sources), batch_size), desc="  NLI scoring"):
+        batch_src = sources[i:i+batch_size]
+        batch_sum = summaries[i:i+batch_size]
+
+        pairs = [
+            {"text": src[:src_max_chars], "text_pair": summ[:sum_max_chars]}
+            for src, summ in zip(batch_src, batch_sum)
+        ]
+        preds = nli(pairs, truncation=True)
+
+        for pred in preds:
+            label = pred["label"].lower()
+            if label == "entailment":
+                scores.append(pred["score"])
+            elif label == "contradiction":
+                scores.append(1.0 - pred["score"])
+            else:  # neutral
+                scores.append(0.5)
+
+    scores = np.array(scores)
+    return {
+        "mean":   round(float(scores.mean()), 4),
+        "std":    round(float(scores.std()),  4),
+        "n":      len(scores),
+        "scores": scores.tolist(),
+    }
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
 
-    # ── Load or generate summaries ───────────────────────────────────
-    # If summaries are already saved from a previous run, reload them directly.
-    # This avoids re-running the generation step every time.
+    # ── Load or generate summaries ────────────────────────────────────────────
     if Path(SUMMARIES_FILE).exists():
         print(f"Loading existing summaries from {SUMMARIES_FILE}...")
         with open(SUMMARIES_FILE, "r", encoding="utf-8") as f:
             summaries = json.load(f)
-        predictions = [s["generated"]  for s in summaries]
-        references  = [s["reference"]  for s in summaries]
+        predictions = [s["generated"] for s in summaries]
+        references  = [s["reference"] for s in summaries]
         print(f"Loaded {len(predictions)} summaries.")
 
     else:
@@ -264,7 +330,6 @@ def main():
                 art_sentences  = example.get("article_text", [])
                 abst_sentences = example.get("abstract_text", [])
 
-                # Clean <S> / </S> tags from abstract (same as loading script)
                 abst_sentences = [
                     s.replace("<S>", "").replace("</S>", "")
                     for s in abst_sentences
@@ -286,35 +351,79 @@ def main():
             json.dump(summaries, f, indent=2, ensure_ascii=False)
         print(f"Summaries saved → {SUMMARIES_FILE}")
 
-    # ── ROUGE ───────────────────────────────────────────────
+    # ── ROUGE ─────────────────────────────────────────────────────────────────
     print("\nComputing ROUGE scores...")
     rouge_results = compute_rouge(predictions, references)
     print(f"  ROUGE-1: {rouge_results['rouge1']}")
     print(f"  ROUGE-2: {rouge_results['rouge2']}")
     print(f"  ROUGE-L: {rouge_results['rougeL']}")
 
-    # ── BERTScore ───────────────────────────────────────────────
+    # ── BERTScore ─────────────────────────────────────────────────────────────
     bertscore_results = compute_bertscore(predictions, references, BERTSCORE_MODEL)
-    print(f"\n  BERTScore precision : {bertscore_results['precision']}")
-    print(f"  BERTScore recall    : {bertscore_results['recall']}")
+    print(f"\n  BERTScore Precision : {bertscore_results['precision']}")
+    print(f"  BERTScore Recall    : {bertscore_results['recall']}")
     print(f"  BERTScore F1        : {bertscore_results['f1']}")
 
-    # ── Save scores ───────────────────────────────────────────────
+    # ── Semantic Similarity ───────────────────────────────────────────────────
+    sem_results = compute_semantic_similarity(predictions, references, SEMANTIC_MODEL)
+    print(f"\n  Semantic Similarity (MiniLM): {sem_results['mean']} ± {sem_results['std']}")
+
+    # ── NLI Consistency ───────────────────────────────────────────────────────
+    # Subsample for speed if NLI_SAMPLE_SIZE is set
+    if NLI_SAMPLE_SIZE is not None and NLI_SAMPLE_SIZE < len(predictions):
+        print(f"\n  Subsampling {NLI_SAMPLE_SIZE} examples for NLI consistency...")
+        import random
+        random.seed(42)
+        indices = random.sample(range(len(predictions)), NLI_SAMPLE_SIZE)
+        nli_preds = [predictions[i] for i in indices]
+        nli_refs  = [references[i]  for i in indices]
+    else:
+        nli_preds = predictions
+        nli_refs  = references
+
+    nli_results = compute_nli_consistency(nli_refs, nli_preds, NLI_MODEL)
+    print(f"\n  NLI Consistency: {nli_results['mean']} ± {nli_results['std']} (n={nli_results['n']})")
+
+    # ── Print unified summary table ───────────────────────────────────────────
+    print("\n" + "=" * 50)
+    print(f"{'Metric':<30} {'Score':>10}")
+    print("=" * 50)
+    print(f"{'ROUGE-1':<30} {rouge_results['rouge1']:>10.4f}")
+    print(f"{'ROUGE-2':<30} {rouge_results['rouge2']:>10.4f}")
+    print(f"{'ROUGE-L':<30} {rouge_results['rougeL']:>10.4f}")
+    print(f"{'BERTScore F1 (roberta-large)':<30} {bertscore_results['f1']:>10.4f}")
+    print(f"{'Semantic Sim (MiniLM)':<30} {sem_results['mean']:>10.4f}")
+    print(f"{'NLI Consistency (DeBERTa)':<30} {nli_results['mean']:>10.4f}")
+    print("=" * 50)
+
+    # ── Save all scores ───────────────────────────────────────────────────────
     scores = {
-        "model":        "extractive_tfidf_lead_bias",
+        "model": "extractive_tfidf_lead_bias",
         "config": {
-            "num_sentences":   NUM_SENTENCES,
-            "lead_bias":       LEAD_BIAS,
-            "bertscore_model": BERTSCORE_MODEL,
+            "num_sentences":    NUM_SENTENCES,
+            "lead_bias":        LEAD_BIAS,
+            "bertscore_model":  BERTSCORE_MODEL,
+            "semantic_model":   SEMANTIC_MODEL,
+            "nli_model":        NLI_MODEL,
+            "nli_sample_size":  NLI_SAMPLE_SIZE,
         },
         "n_test_examples": len(predictions),
-        "rouge":     rouge_results,
-        "bertscore": bertscore_results,
+        "rouge":       rouge_results,
+        "bertscore":   bertscore_results,
+        "semantic_similarity": {
+            "mean": sem_results["mean"],
+            "std":  sem_results["std"],
+        },
+        "nli_consistency": {
+            "mean": nli_results["mean"],
+            "std":  nli_results["std"],
+            "n":    nli_results["n"],
+        },
     }
     with open(SCORES_FILE, "w") as f:
         json.dump(scores, f, indent=2)
     print(f"\nScores saved → {SCORES_FILE}")
-    print("\nDone.")
+    print("Done.")
 
 
 if __name__ == "__main__":

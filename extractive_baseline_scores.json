@@ -3,7 +3,10 @@
   "config": {
     "num_sentences": 6,
     "lead_bias": 1.0,
-    "bertscore_model": "roberta-large"
+    "bertscore_model": "roberta-large",
+    "semantic_model": "all-MiniLM-L6-v2",
+    "nli_model": "cross-encoder/nli-deberta-v3-small",
+    "nli_sample_size": 500
   },
   "n_test_examples": 6440,
   "rouge": {
@@ -12,8 +15,17 @@
     "rougeL": 0.1276
   },
   "bertscore": {
-    "precision": 0.7971,
-    "recall": 0.8129,
-    "f1": 0.8047
+    "precision": 0.7966,
+    "recall": 0.8124,
+    "f1": 0.8042
+  },
+  "semantic_similarity": {
+    "mean": 0.5714,
+    "std": 0.135
+  },
+  "nli_consistency": {
+    "mean": 0.5008,
+    "std": 0.1527,
+    "n": 500
   }
 }

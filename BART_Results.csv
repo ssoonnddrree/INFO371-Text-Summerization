@@ -1,0 +1,10 @@
+
+ROUGE-1: 0.3496
+ROUGE-2: 0.1190
+ROUGE-L: 0.2124
+
+BERTScore Precision: 0.8228
+BERTScore Recall: 0.7822
+BERTScore F1: 0.8014
+
+
