@@ -8,6 +8,27 @@ We use the **ArXiv** split of the Scientific Papers dataset (Cohan et al., 2018)
 
 Due to computational constraints, we train on a **subset of 5,000 examples** and validate on **500 examples**, while evaluating on the **full test split of 6,440 examples**.
 
+
+##Project structure
+.
+├── BART(1).ipynb
+├── BART_Results.csv
+├── LLM_zero_and_few_shot.ipynb
+├── README.md
+├── bart-arxiv-finetuned
+├── bart_test.ipynb
+├── compute_statistics.py
+├── dataset_statistics.json
+├── extractiveBaseline.py
+├── extractive_baseline_scores.json
+└── extractive_baseline_summaries.json
+└── INFO371.pdf
+
+
+
+2 directories, 10 files
+
+
 ---
 
 ## `compute_statistics.py`
